@@ -8,139 +8,90 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresPermission
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
+import com.example.smartalignoraapplication.jetpackcompose.BleScreen
+import java.text.SimpleDateFormat
 import java.util.*
 
 class MainActivity : ComponentActivity() {
 
-    /* ---------------- UUIDs ---------------- */
-    // These MUST match ESP32 service & characteristic UUIDs
-    private val SERVICE_UUID =
-        UUID.fromString("a32be81d-570e-4ad9-bf2a-64fdfe3db515")
+    companion object { private const val TAG = "BLE_MAIN" }
+    private val isConnected = mutableStateOf(false)
 
-    private val WRITE_UUID =
-        UUID.fromString("c6b0278a-f9b5-4306-8eee-5d74d746bcc3")
 
-    /* ---------------- Bluetooth objects ---------------- */
-    // Adapter = phone Bluetooth controller
+    // === UUIDs (MUST MATCH ESP32) ===
+    private val SERVICE_UUID = UUID.fromString("a32be81d-570e-4ad9-bf2a-64fdfe3db515")
+    private val WRITE_UUID   = UUID.fromString("c6b0278a-f9b5-4306-8eee-5d74d746bcc3")
+    private val NOTIFY_UUID  = UUID.fromString("b3af0550-1ba9-4efb-aac7-14287a527e06")
+    private val CCCD_UUID    = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
     private lateinit var adapter: BluetoothAdapter
-
-    // Scanner = used to scan BLE devices
     private lateinit var scanner: BluetoothLeScanner
-
-    // GATT = active BLE connection
     private var gatt: BluetoothGatt? = null
 
-    /* ---------------- UI state ---------------- */
-    // Used by Compose to update UI automatically
     private val status = mutableStateOf("Idle")
     private val devices = mutableStateListOf<BluetoothDevice>()
+    private val receivedData = mutableStateListOf<String>()
 
-    /* ---------------- Permission launcher ---------------- */
-    // Used to request runtime Bluetooth permissions
+    private var isScanning = false
+    private val handler = Handler(Looper.getMainLooper())
+
+    // ===== Launchers =====
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            if (it.values.all { granted -> granted }) {
-                startScan()
-            } else {
-                status.value = "Permission denied"
-            }
+            if (it.values.all { granted -> granted }) startScan()
+            else status.value = "Permission denied"
         }
 
-    /* ---------------- Bluetooth ON launcher ---------------- */
-    // Shows system dialog to turn Bluetooth ON
-    private val enableBluetoothLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK) {
-                startScan()
-            } else {
-                status.value = "Bluetooth is required"
-            }
+    private val enableBtLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+            if (it.resultCode == RESULT_OK) startScan()
+            else status.value = "Bluetooth required"
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Get Bluetooth system service
-        val manager =
-            getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-
-        adapter = manager.adapter
+        adapter = (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
         scanner = adapter.bluetoothLeScanner
 
-        /* ---------------- UI (Jetpack Compose) ---------------- */
         setContent {
-            MaterialTheme {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-
-                    Text(
-                        "SmartAlignOR BLE",
-                        style = MaterialTheme.typography.headlineMedium
-                    )
-
-                    Spacer(Modifier.height(8.dp))
-                    Text(status.value)
-
-                    Spacer(Modifier.height(12.dp))
-                    Button(onClick = { requestPermissionAndBluetooth() }) {
-                        Text("Scan BLE Devices")
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-
-                    // Show all scanned BLE devices
-                    devices.forEach { device ->
-                        Text(
-                            "${device.name ?: "Unknown"} - ${device.address}",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { connect(device) }
-                                .padding(6.dp)
-                        )
-                    }
-                }
-            }
+            BleScreen(
+                status = status.value,
+                devices = devices,
+                receivedData = receivedData,
+                isConnected = isConnected.value,
+                onScanClick = { checkBluetooth() },
+                onConnectClick = { connect(it) },
+                onDisconnectClick = { disconnect() },
+                onClearDataClick = { receivedData.clear() }
+            )
         }
     }
 
-    /* ---------------- Permission + Bluetooth ON check ---------------- */
-    private fun requestPermissionAndBluetooth() {
-
-        // If Bluetooth is OFF, ask user to turn it ON
+    // ===== Bluetooth / Permissions =====
+    private fun checkBluetooth() {
         if (!adapter.isEnabled) {
-            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
-            enableBluetoothLauncher.launch(intent)
+            status.value = "Enable Bluetooth"
+            enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
             return
         }
 
-        // Required permissions depend on Android version
-        val permissions =
+        val perms =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                arrayOf(
-                    Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.BLUETOOTH_CONNECT
-                )
-            else
-                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+                arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+            else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
 
-        val missing = permissions.filter {
+        val missing = perms.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
 
@@ -148,14 +99,26 @@ class MainActivity : ComponentActivity() {
         else permissionLauncher.launch(missing.toTypedArray())
     }
 
-    /* ---------------- BLE Scan ---------------- */
+    // ===== Scan =====
     private fun startScan() {
-        status.value = "Scanning..."
+        if (isScanning) return
+        isScanning = true
         devices.clear()
+        status.value = "🔍 Scanning..."
         scanner.startScan(scanCallback)
+
+        handler.postDelayed({
+            if (isScanning) stopScan()
+        }, 10000)
     }
 
-    // Called every time a BLE device is found
+    private fun stopScan() {
+        if (!isScanning) return
+        isScanning = false
+        scanner.stopScan(scanCallback)
+        status.value = "Tap ESP32 to connect"
+    }
+
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(type: Int, result: ScanResult) {
             val device = result.device
@@ -165,71 +128,106 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /* ---------------- BLE Connect ---------------- */
+    // ===== Connect =====
     private fun connect(device: BluetoothDevice) {
+        stopScan()
         status.value = "Connecting..."
         gatt?.close()
-
-        // TRANSPORT_LE ensures BLE connection
         gatt =
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-                device.connectGatt(
-                    this,
-                    false,
-                    gattCallback,
-                    BluetoothDevice.TRANSPORT_LE
-                )
-            else
-                device.connectGatt(this, false, gattCallback)
+                device.connectGatt(this, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            else device.connectGatt(this, false, gattCallback)
     }
 
-    /* ---------------- GATT callbacks ---------------- */
+    private fun disconnect() {
+        gatt?.disconnect()
+    }
+
+    // ===== GATT CALLBACK =====
     private val gattCallback = object : BluetoothGattCallback() {
 
-        // Called when connection state changes
-        override fun onConnectionStateChange(
-            g: BluetoothGatt,
-            statusCode: Int,
-            newState: Int
-        ) {
+        override fun onConnectionStateChange(g: BluetoothGatt, statusCode: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
-                status.value = "Connected"
-                g.discoverServices() // Ask ESP32 for services
+                Log.d(TAG, "Connected")
+                isConnected.value = true
+                runOnUiThread { status.value = "Connected, discovering..." }
+                handler.postDelayed({ g.discoverServices() }, 300)
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.d(TAG, "Disconnected")
+                runOnUiThread {
+                    status.value = "Disconnected, rescanning..."
+                    isConnected.value = false
+                    receivedData.clear()
+                    devices.clear()
+                }
+                g.close()
+                gatt = null
+                handler.postDelayed({ startScan() }, 1500)
             }
         }
 
-        // Called after services are discovered
         override fun onServicesDiscovered(g: BluetoothGatt, statusCode: Int) {
-            g.getService(SERVICE_UUID)
-                ?.getCharacteristic(WRITE_UUID)
-                ?.let { sendUnixTimestamp(g, it) }
-                ?: run { status.value = "Service not found" }
+            if (statusCode != BluetoothGatt.GATT_SUCCESS) return
+
+            val service = g.getService(SERVICE_UUID) ?: return
+            val writeChar = service.getCharacteristic(WRITE_UUID)
+            val notifyChar = service.getCharacteristic(NOTIFY_UUID)
+
+            // 1️⃣ SEND TIMESTAMP IMMEDIATELY (HANDSHAKE)
+            writeChar?.let { sendTimestamp(g, it) }
+
+            // 2️⃣ ENABLE NOTIFY
+            notifyChar?.let {
+                g.setCharacteristicNotification(it, true)
+                handler.postDelayed({
+                    val desc = it.getDescriptor(CCCD_UUID)
+                    desc?.let { d ->
+                        d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        g.writeDescriptor(d)
+                    }
+                }, 300)
+            }
+
+            runOnUiThread { status.value = "Handshake sent, waiting for data..." }
+        }
+
+        override fun onDescriptorWrite(
+            gatt: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int
+        ) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                runOnUiThread { this@MainActivity.status.value = "🔔 Notifications enabled" }
+            }
+        }
+
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic
+        ) {
+            val value = characteristic.value.toString(Charsets.UTF_8)
+            val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+            runOnUiThread {
+                receivedData.add("$value [$time]")
+                if (receivedData.size > 50) receivedData.removeAt(0)
+                status.value = "LIVE: $value"
+            }
         }
     }
 
-    /* ---------------- Send Unix Timestamp ---------------- */
-    // Sends current time (seconds) to ESP32
+    // ===== Timestamp Write =====
     @RequiresPermission(Manifest.permission.BLUETOOTH_CONNECT)
-    private fun sendUnixTimestamp(
-        gatt: BluetoothGatt,
-        characteristic: BluetoothGattCharacteristic
-    ) {
-        val unixTime = (System.currentTimeMillis() / 1000L).toString().toByteArray()
+    private fun sendTimestamp(gatt: BluetoothGatt, ch: BluetoothGattCharacteristic) {
+        val ts = (System.currentTimeMillis() / 1000L).toString().toByteArray()
 
-        // Android 13+ non-deprecated API
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            gatt.writeCharacteristic(
-                characteristic,
-                unixTime,
-                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            )
-        } else {
-            // Older Android support
-            characteristic.value = unixTime
-            gatt.writeCharacteristic(characteristic)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            gatt.writeCharacteristic(ch, ts, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        else {
+            ch.value = ts
+            gatt.writeCharacteristic(ch)
         }
 
-        status.value = "Timestamp sent\n${String(unixTime)}"
-        Log.d("BLE_WRITE", "Sent: ${String(unixTime)}")
+        Log.d(TAG, "Timestamp sent")
     }
 }
