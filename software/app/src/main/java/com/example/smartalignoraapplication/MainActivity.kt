@@ -38,6 +38,11 @@ class MainActivity : ComponentActivity() {
                 status = controller.status.value,
                 isConnected = controller.isConnected.value,
                 receivedData = controller.data,
+
+                // ही नवीन ओळ ॲड करा:
+                currentPitch = controller.currentPitch.value,
+
+                onConnectClick = { if(!controller.isConnected.value) controller.startScan() },
                 onDisconnectClick = { controller.disconnect() },
                 onClearDataClick = { controller.clearData() }
             )

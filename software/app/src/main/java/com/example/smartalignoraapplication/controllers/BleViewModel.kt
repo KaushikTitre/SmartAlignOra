@@ -19,6 +19,9 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     val status = mutableStateOf("Initializing…")
     val data = mutableStateListOf<String>()
 
+    // NEW: Animation साठी फक्त नंबर (Default 0.0)
+    val currentPitch = mutableStateOf(0f)
+
     // Dependencies
     private val repository = Esp32Repository()
     private val bleService = BleService(
@@ -26,8 +29,27 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
         repository = repository,
         onStatusChange = { status.value = it },
         onConnectionChange = { isConnected.value = it },
-        onDataReceived = { data.add(0, it) }
-    )
+        onDataReceived = { rawString ->
+            data.add(0, rawString)
+
+            // --- NEW ROBUST PARSING LOGIC ---
+            try {
+                // This Regex finds the first decimal number in the string (e.g. "12.5" from "Pitch: 12.5 [10:00]")
+                val match = Regex("-?\\d+(\\.\\d+)?").find(rawString)
+                if (match != null) {
+                    // Check if this number looks like a timestamp (too big) or a pitch angle
+                    val number = match.value.toFloat()
+
+                    // Only update pitch if it's a reasonable angle (between -90 and 90)
+                    // Timestamps like 1738245... are huge, so we ignore them.
+                    if (number > -90 && number < 90) {
+                        currentPitch.value = number
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }    )
 
     // Bluetooth Toggle Receiver
     private val bluetoothStateReceiver = object : BroadcastReceiver() {
