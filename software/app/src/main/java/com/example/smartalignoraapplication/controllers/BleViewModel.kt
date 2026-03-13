@@ -47,6 +47,8 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
 
     private lateinit var classifier: PostureClassifier
 
+
+
     // ✅ Dependencies
 
     private val repository = Esp32Repository()
@@ -133,6 +135,7 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
             if (badCounter >= BAD_LIMIT && !alertActive) {
 
                 alertState.value = "⚠️ Sustained Bad Posture!"
+                send("1")
                 alertActive = true
                 lastAlertTime = currentTime
             }
@@ -142,6 +145,7 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
                 if (currentTime - lastAlertTime >= REMINDER_INTERVAL) {
 
                     alertState.value = "🔔 Still Bad Posture!"
+                    send("1")
                     lastAlertTime = currentTime
                 }
             }
@@ -150,6 +154,7 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
 
             badCounter = 0
             alertActive = false
+            send("0")
             alertState.value = ""
         }
     }
@@ -185,6 +190,10 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     fun disconnect() = bleService.disconnect()
     fun clearData() = data.clear()
     fun isBluetoothEnabled() = bleService.isBluetoothEnabled()
+
+    fun send(value: String) {
+        bleService.sendToEsp32(value)
+    }
 
     override fun onCleared() {
         super.onCleared()

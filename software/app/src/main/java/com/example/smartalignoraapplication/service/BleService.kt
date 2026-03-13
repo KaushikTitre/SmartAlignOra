@@ -166,6 +166,36 @@ class BleService(
         }
     }
 
+
+    @SuppressLint("MissingPermission")
+    fun sendToEsp32(value: String) {
+
+        val g = gatt ?: return
+
+        val service = g.getService(SERVICE_UUID) ?: return
+
+        val writeChar = service.getCharacteristic(WRITE_UUID) ?: return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+
+            g.writeCharacteristic(
+                writeChar,
+                value.toByteArray(),
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            )
+
+        } else {
+
+            writeChar.value = value.toByteArray()
+            writeChar.writeType =
+                BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+
+            g.writeCharacteristic(writeChar)
+        }
+
+        Log.d("BLE", "Sent = $value")
+    }
+
     fun cleanup() {
         disconnect()
         handler.removeCallbacksAndMessages(null)
