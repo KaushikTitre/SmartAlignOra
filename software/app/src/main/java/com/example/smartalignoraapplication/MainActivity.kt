@@ -39,13 +39,21 @@ class MainActivity : ComponentActivity() {
                 isConnected = controller.isConnected.value,
                 receivedData = controller.data,
 
-                // ही नवीन ओळ ॲड करा:
                 currentPitch = controller.currentPitch.value,
 
-                onConnectClick = { if(!controller.isConnected.value) controller.startScan() },
+                // ✅ ADD THESE TWO LINES
+                postureState = controller.postureState.value,
+                alertState = controller.alertState.value,
+
+                onConnectClick = {
+                    if (!controller.isConnected.value)
+                        controller.startScan()
+                },
+
                 onDisconnectClick = { controller.disconnect() },
                 onClearDataClick = { controller.clearData() }
             )
+
         }
 
         checkPermissionsAndStart()
