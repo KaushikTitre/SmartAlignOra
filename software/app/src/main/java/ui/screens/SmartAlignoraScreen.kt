@@ -4,6 +4,8 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -37,7 +39,17 @@ fun SmartAlignoraApp() {
 
 // ─── Splash Screen ────────────────────────────────────────────────────────────
 @Composable
-fun SplashScreen() {
+fun SplashScreen(onNavigateToAbout: () -> Unit = {}) {
+
+    // Auto navigate to About screen after 2 seconds
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(2000)
+        onNavigateToAbout()
+    }
+
+    // verticalScroll makes the splash screen scrollable
+    val scrollState = rememberScrollState()
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -47,26 +59,18 @@ fun SplashScreen() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(scrollState)  // ← enables vertical scroll
                 .padding(horizontal = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            Spacer(modifier = Modifier.weight(0.15f))
-
-            // App name + tagline
+            Spacer(modifier = Modifier.height(80.dp))
             AppLogoSection()
-
-            Spacer(modifier = Modifier.weight(0.25f))
-
-            // Spine mascot illustration
+            Spacer(modifier = Modifier.height(60.dp))
             MascotSection()
-
             Spacer(modifier = Modifier.height(16.dp))
-
-            // Pulsing loading label
             LoadingSection()
-
-            Spacer(modifier = Modifier.weight(0.05f))
+            Spacer(modifier = Modifier.height(80.dp))
         }
     }
 }
@@ -83,6 +87,7 @@ fun AppLogoSection() {
     }
 }
 
+// Bold-italic purple brand name
 @Composable
 fun AppTitle(text: String) {
     Text(
@@ -96,6 +101,7 @@ fun AppTitle(text: String) {
     )
 }
 
+// Wide-tracked ALL-CAPS tagline
 @Composable
 fun AppTagline(text: String) {
     Text(
@@ -130,7 +136,7 @@ fun MascotSection() {
     ) {
         Image(
             painter = painterResource(id = R.drawable.spine_mascot_v2),
-            contentDescription = "SmartAlignora spine mascot",
+            contentDescription = "SmartAlignora mascot",
             contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize()
         )
