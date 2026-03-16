@@ -117,7 +117,7 @@ fun DeviceSetupScreen(
             Spacer(modifier = Modifier.height(32.dp))
         }
 
-        // ── Sticky bottom section ─────────────────────────────────────────
+        // ── Sticky bottom section ─────────────────────────────────────
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -150,14 +150,19 @@ fun DeviceSetupScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Skip Setup link
-            TextButton(onClick = onSkip) {
+            // Skip Setup — same style as Page 4
+            TextButton(
+                onClick = onSkip,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Text(
                     text = "Skip Setup",
                     color = SetupTextGray,
-                    fontSize = 14.sp
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center
                 )
             }
         }
