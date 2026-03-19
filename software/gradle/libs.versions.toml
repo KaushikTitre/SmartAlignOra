@@ -16,6 +16,7 @@ activityCompose = "1.8.0"
 junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"
+playServicesLocation = "21.3.0"
 
 [libraries]
 # --- AndroidX ---
@@ -52,6 +53,7 @@ firebase-database-ktx = { group = "com.google.firebase", name = "firebase-databa
 junit-lib = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

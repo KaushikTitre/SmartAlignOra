@@ -1,5 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.SmartAlignOraApplication" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Main app theme -->
+    <style name="Theme.SmartAlignOraApplication"
+        parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">#6B21A8</item>
+        <item name="colorPrimaryVariant">#9333EA</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#00C9A7</item>
+        <item name="colorOnSecondary">#FFFFFF</item>
+        <item name="android:statusBarColor">#0F4C81</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+    </style>
+
+    <!--
+        SplashTheme — windowBackground purple आहे
+        @drawable/splash_background → वरचे XML file
+    -->
+    <style name="SplashTheme"
+        parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+        <item name="android:statusBarColor">#6B21A8</item>
+        <item name="android:navigationBarColor">#6B21A8</item>
+        <item name="colorPrimary">#6B21A8</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
 </resources>

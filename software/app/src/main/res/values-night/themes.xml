@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.SmartAlignOraApplication"
+        parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#9333EA</item>
+        <item name="colorPrimaryVariant">#6B21A8</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:statusBarColor">#0F4C81</item>
+    </style>
+
+    <!--
+        Night SplashTheme — same drawable वापरतो
+        splash_background.xml मध्ये purple color आहे — night mode मध्ये पण चांगला दिसतो
+    -->
+    <style name="SplashTheme"
+        parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+        <item name="android:statusBarColor">#6B21A8</item>
+        <item name="android:navigationBarColor">#6B21A8</item>
+        <item name="colorPrimary">#6B21A8</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+    </style>
+
+</resources>

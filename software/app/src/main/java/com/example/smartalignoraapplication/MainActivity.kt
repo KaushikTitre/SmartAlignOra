@@ -10,71 +10,194 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.example.smartalignoraapplication.controller.BleViewModel
-import com.example.smartalignoraapplication.jetpackcompose.BleScreen
+import com.example.smartalignoraapplication.ui.screens.AboutScreen
+import com.example.smartalignoraapplication.ui.screens.MainShell
+import com.example.smartalignoraapplication.ui.screens.SplashScreen
 
 class MainActivity : ComponentActivity() {
 
-    private val controller: BleViewModel by viewModels()
+    val viewModel: BleViewModel by viewModels()
 
-    private val permissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            if (result.values.all { it }) controller.startScan()
-            else controller.status.value = "Permission required"
-        }
+    // ✅ splash → about → main
+    private var currentScreen by mutableStateOf("splash")
 
-    private val enableBtLauncher =
+
+    // ---------------- BT enable ----------------
+
+    val enableBtLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            if (result.resultCode == RESULT_OK) checkPermissionsAndStart()
-            else controller.status.value = "Bluetooth required"
+            if (result.resultCode == RESULT_OK) {
+                viewModel.startScan()
+            } else {
+                viewModel.status.value = "Bluetooth required"
+            }
         }
+
+
+    // ---------------- BT permission ----------------
+
+    val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+            if (results.values.all { it }) {
+
+                if (!viewModel.isBluetoothEnabled()) {
+                    enableBtLauncher.launch(
+                        Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                    )
+                } else {
+                    viewModel.startScan()
+                }
+
+            } else {
+                viewModel.status.value = "Bluetooth permission required"
+            }
+        }
+
+
+    // ---------------- Location permission ----------------
+
+    val locationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+
+            val granted = results.values.all { it }
+
+            viewModel.onLocationPermissionResult(granted)
+        }
+
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         setContent {
-            BleScreen(
-                status = controller.status.value,
-                isConnected = controller.isConnected.value,
-                receivedData = controller.data,
 
-                currentPitch = controller.currentPitch.value,
+            when (currentScreen) {
 
-                // ✅ ADD THESE TWO LINES
-                postureState = controller.postureState.value,
-                alertState = controller.alertState.value,
+                // ✅ Splash first
+                "splash" -> SplashScreen(
+                    onNavigateToAbout = {
+                        currentScreen = "about"
+                    }
+                )
 
-                onConnectClick = {
-                    if (!controller.isConnected.value)
-                        controller.startScan()
-                },
 
-                onDisconnectClick = { controller.disconnect() },
-                onClearDataClick = { controller.clearData() }
-            )
+                // ✅ About second
+                "about" -> AboutScreen(
+                    onBack = {},
+                    onGetStarted = {
+                        currentScreen = "main"
+                    }
+                )
 
+
+                // ✅ Main app
+                "main" -> MainShell(
+                    viewModel = viewModel,
+
+                    onRequestBtPermission = {
+                        requestBluetoothPermissions()
+                    },
+
+                    onEnableBluetooth = {
+                        enableBtLauncher.launch(
+                            Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                        )
+                    },
+
+                    onRequestLocationPerm = {
+                        requestLocationPermissions()
+                    }
+                )
+            }
         }
-
-        checkPermissionsAndStart()
     }
 
-    private fun checkPermissionsAndStart() {
-        if (!controller.isBluetoothEnabled()) {
-            enableBtLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
-            return
+
+
+    // ================================
+    // BLUETOOTH PERMISSION
+    // ================================
+
+    fun requestBluetoothPermissions() {
+
+        val perms =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+
+                arrayOf(
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                )
+
+            } else {
+
+                arrayOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION
+                )
+            }
+
+
+        val granted = perms.all {
+
+            ContextCompat.checkSelfPermission(
+                this,
+                it
+            ) == PackageManager.PERMISSION_GRANTED
         }
 
-        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
 
-        if (perms.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
-            controller.startScan()
+        if (granted) {
+
+            if (!viewModel.isBluetoothEnabled()) {
+
+                enableBtLauncher.launch(
+                    Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+                )
+
+            } else {
+
+                viewModel.startScan()
+            }
+
         } else {
+
             permissionLauncher.launch(perms)
+        }
+    }
+
+
+
+    // ================================
+    // LOCATION PERMISSION
+    // ================================
+
+    fun requestLocationPermissions() {
+
+        val perms = arrayOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+
+        val granted = perms.all {
+
+            ContextCompat.checkSelfPermission(
+                this,
+                it
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+
+
+        if (granted) {
+
+            viewModel.onLocationPermissionResult(true)
+
+        } else {
+
+            locationPermissionLauncher.launch(perms)
         }
     }
 }
