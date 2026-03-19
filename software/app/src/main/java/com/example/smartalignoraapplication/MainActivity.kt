@@ -74,6 +74,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // ── Start GPS hardware immediately if permission was granted previously ─
+        // This ensures lastKnownLocation is populated well before any fall fires.
+        // We use ACCESS_FINE_LOCATION as the primary check.
+        val fineLocationGranted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (fineLocationGranted) {
+            // Notify ViewModel: permission is confirmed, start LocationManager now
+            viewModel.onLocationPermissionResult(true)
+        }
+
         setContent {
 
             when (currentScreen) {

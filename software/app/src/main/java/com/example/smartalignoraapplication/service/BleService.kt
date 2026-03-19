@@ -9,21 +9,23 @@ import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
-import java.text.SimpleDateFormat
 import java.util.*
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BleService — ESP32 शी BLE connection handle करतो
+// BleService
 //
-// ✅ Esp32Repository काढला — Firebase save BleViewModel timer करतो
-// ✅ onDataReceived callback → BleViewModel ला data मिळतो
-// ✅ 5 second Firebase save → BleViewModel मधील pitchLogTimer करतो
+// KEY FIX: onDataReceived now delivers raw ByteArray instead of String.
+//
+// The ESP32 sends a 20-byte BINARY packet. Calling decodeToString() on it
+// corrupts the data (multi-byte UTF-8 interpretation of arbitrary byte values).
+// We now pass the raw ByteArray directly so BleViewModel can call
+// fallDetector.decodeBlePacket(bytes) without any encoding damage.
 // ─────────────────────────────────────────────────────────────────────────────
 class BleService(
     private val context:            Context,
     private val onStatusChange:     (String) -> Unit,
     private val onConnectionChange: (Boolean) -> Unit,
-    private val onDataReceived:     (String) -> Unit
+    private val onDataReceived:     (ByteArray) -> Unit   // ← ByteArray, not String
 ) {
 
     private val SERVICE_UUID = UUID.fromString("a32be81d-570e-4ad9-bf2a-64fdfe3db515")
@@ -127,7 +129,6 @@ class BleService(
                         onConnectionChange(true)
                         onStatusChange("Connected 🟢")
                         g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
-                        // Delay for stability
                         handler.postDelayed({ g.discoverServices() }, 600)
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
@@ -135,7 +136,6 @@ class BleService(
                         onStatusChange("Disconnected 🔴 Reconnecting...")
                         g.close()
                         gatt = null
-                        // Auto reconnect after 2 seconds
                         handler.postDelayed({ startScanning() }, 2000)
                     }
                 }
@@ -155,8 +155,14 @@ class BleService(
                 g.setCharacteristicNotification(notifyChar, true)
                 val desc = notifyChar.getDescriptor(CCCD_UUID)
                 desc?.let {
+                    @Suppress("DEPRECATION")
                     it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    g.writeDescriptor(it)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        g.writeDescriptor(it, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        g.writeDescriptor(it)
+                    }
                 }
             }
 
@@ -171,25 +177,33 @@ class BleService(
             }
         }
 
-        // ── Data received from ESP32 ──────────────────────────────────────────
-        // ✅ Esp32Repository.saveReading() काढला
-        // Firebase save → BleViewModel मधील 5 second timer करतो
+        // ── API 33+ (Android 13+) — preferred binary callback ────────────────
+        // This fires on Android 13+ with the raw byte value directly.
+        // No String conversion here — we pass the raw bytes to BleViewModel.
+        @SuppressLint("MissingPermission")
+        override fun onCharacteristicChanged(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray                                   // API 33+ override
+        ) {
+            val bytes = value.copyOf()
+            Log.v("BleService", "BLE packet (API33+): ${bytes.size} bytes")
+            handler.post { onDataReceived(bytes) }
+        }
+
+        // ── Legacy API (<33) — also delivers raw bytes ────────────────────────
+        // characteristic.value is a ByteArray. We copy it before posting
+        // because the array can be reused by the stack.
+        @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
-            val value = characteristic.value.decodeToString().trim()
-            val time  = SimpleDateFormat(
-                "HH:mm:ss", Locale.getDefault()
-            ).format(Date())
-
-            // BleViewModel ला raw data पाठवा
-            handler.post {
-                onDataReceived("$value [$time]")
-            }
-
-            // ✅ Firebase save येथे नाही
-            // BleViewModel → startPitchLogTimer() → दर 5 seconds → savePitchLog()
+            // Guard: don't double-fire on API 33+ (the above override is called instead)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
+            val bytes = characteristic.value?.copyOf() ?: return
+            Log.v("BleService", "BLE packet (legacy): ${bytes.size} bytes")
+            handler.post { onDataReceived(bytes) }
         }
     }
 

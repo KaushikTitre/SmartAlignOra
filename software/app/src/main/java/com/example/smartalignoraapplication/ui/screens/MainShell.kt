@@ -196,18 +196,16 @@ fun MainShell(
         )
     }
 
-    // ── Fall detected popup ───────────────────────────────────────────────────
-    if (fallDetected && viewModel.settingsState.fallAlertEnabled) // Fall popup — फक्त fallAlertEnabled असेल तर show होतो
-// (runFallDetection मध्ये आधीच check आहे — double safety)
-        if (fallDetected && viewModel.settingsState.fallAlertEnabled) {
-            FallAlertDialog(
-                location = viewModel.lastKnownLocation.value,
-                fallCount = continuousFallCount,
-                fallAlertEnabled = true,
-                emailSentStatus = emailSentStatus,
-                onDismiss = { viewModel.dismissFallAlert() }
-            )
-        }
+    // Popup — only after 10 consecutive falls AND fallAlertEnabled = true
+    if (fallDetected && viewModel.settingsState.fallAlertEnabled) {
+        FallAlertDialog(
+            location         = viewModel.lastKnownLocation.value,
+            fallCount        = continuousFallCount,
+            fallAlertEnabled = true,
+            emailSentStatus  = emailSentStatus,
+            onDismiss        = { viewModel.dismissFallAlert() }
+        )
+    }
 }
 
 // =============================================================================
@@ -221,8 +219,8 @@ fun HomeTab(viewModel: BleViewModel) {
     val badCount      = viewModel.sessionBadCount.value
     val total         = goodCount + badCount
     val goodPct       = if (total > 0) goodCount * 100f / total else 0f
-    val fallLabel    by viewModel.fallLabel
-    val fallProb     by viewModel.fallProbability
+    val fallLabel by viewModel.fallLabelForUI
+    val fallProb  by viewModel.fallProbForUI
 
     val postureColor = when {
         postureState.contains("GOOD") -> AppColors.GoodGreen
@@ -628,8 +626,8 @@ fun PostureTab(viewModel: BleViewModel) {
     val postureState by viewModel.postureState
     val alertState   by viewModel.alertState
     val currentPitch by viewModel.currentPitch
-    val fallLabel    by viewModel.fallLabel
-    val fallProb     by viewModel.fallProbability
+    val fallLabel by viewModel.fallLabelForUI
+    val fallProb  by viewModel.fallProbForUI
 
     val statusColor = when {
         postureState.contains("GOOD") -> AppColors.GoodGreen
@@ -790,7 +788,7 @@ fun FallAlertDialog(
                 Surface(shape = RoundedCornerShape(20.dp), color = AppColors.BadBg) {
                     Text(
                         "Detection #${maxOf(fallCount, 1)}",
-                         modifier   = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                        modifier   = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                         fontSize   = 13.sp,
                         fontWeight = FontWeight.Bold,
                         color      = AppColors.BadRed)
@@ -798,11 +796,11 @@ fun FallAlertDialog(
 
                 // Message
                 Text(
-                    "A fall has been confirmed!\nEmergency email will be sent automatically.",
-                    fontSize  = 14.sp,
-                    color = AppColors.TextSecondary,
+                    "10 consecutive falls confirmed.\nAn emergency email with GPS location has been sent automatically.",
+                    fontSize   = 14.sp,
+                    color      = AppColors.TextSecondary,
                     lineHeight = 22.sp,
-                    textAlign = TextAlign.Center
+                    textAlign  = TextAlign.Center
                 )
 
                 // GPS status

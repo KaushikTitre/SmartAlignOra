@@ -1,5 +1,7 @@
 package com.example.smartalignoraapplication.ui.components
 
+
+import androidx.compose.foundation.Canvas
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -151,7 +153,7 @@ fun PostureAnimationScreen(
         Spacer(Modifier.height(12.dp))
 
         // ── Canvas Body Animation ─────────────────────────────────────────────
-        androidx.compose.foundation.Canvas(
+      Canvas(
             modifier = Modifier.size(360.dp, 440.dp)
         ) {
             val cx      = size.width / 2

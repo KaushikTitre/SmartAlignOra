@@ -1,5 +1,6 @@
 package com.example.smartalignoraapplication.controller
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Application
 import android.bluetooth.BluetoothAdapter
@@ -7,7 +8,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -16,6 +21,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.smartalignoraapplication.ml.FeatureExtractor
@@ -24,11 +30,6 @@ import com.example.smartalignoraapplication.ml.PostureClassifier
 import com.example.smartalignoraapplication.repository.SessionRepository
 import com.example.smartalignoraapplication.service.BleService
 import com.example.smartalignoraapplication.service.EmailService
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
-import com.google.android.gms.location.LocationResult
-import com.google.android.gms.location.LocationServices
-import com.google.android.gms.location.Priority
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -36,12 +37,11 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.sqrt
 
 // =============================================================================
 // MOTOR PROTOCOL:
-//   S1-S6   → Start pattern (loops until stopped)
-//   V1-V100 → Set intensity
-//   0       → Stop everything
+//   S1-S6   → Start pattern   |   V1-V100 → Intensity   |   0 → Stop
 // =============================================================================
 
 enum class VibrationSequence(val label: String, val bleCommand: String) {
@@ -85,30 +85,30 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     val data         = mutableStateListOf<String>()
     val currentPitch = mutableStateOf(0f)
 
-    val postureState = mutableStateOf("Waiting for posture…")
+    val postureState = mutableStateOf("Waiting for posture...")
     val alertState   = mutableStateOf("")
 
-    // ── Analysis data — pitch logs from Firebase ──────────────────────────────
     val pitchData     = mutableStateListOf<Map<String, Any>>()
     val isLoadingData = mutableStateOf(false)
 
-    // ── Fall state ────────────────────────────────────────────────────────────
+    // Fall state
     val fallDetected        = mutableStateOf(false)
     val fallLabel           = mutableStateOf("safe")
     val fallProbability     = mutableStateOf(0f)
+    val fallLabelForUI      = mutableStateOf("safe")   // "safe" when alertEnabled=false
+    val fallProbForUI       = mutableStateOf(0f)
     val continuousFallCount = mutableIntStateOf(0)
     val lastKnownLocation   = mutableStateOf<Location?>(null)
 
-    // ── Dialogs ───────────────────────────────────────────────────────────────
+    // Dialogs
     val locationPermissionGranted = mutableStateOf(false)
     val showLocationPermDialog    = mutableStateOf(false)
     val showEmailInputDialog      = mutableStateOf(false)
     val emailSentStatus           = mutableStateOf("")
 
-    // ── Calibration ───────────────────────────────────────────────────────────
     val isCalibrating = mutableStateOf(false)
 
-    // ── Session analytics ─────────────────────────────────────────────────────
+    // Session analytics
     val postureSessions  = mutableStateListOf<PostureSession>()
     val pitchLogs        = mutableStateListOf<PitchLog>()
     val sessionGoodCount = mutableStateOf(0)
@@ -121,41 +121,54 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
         const val TAG = "BleViewModel"
 
-        const val POSTURE_WINDOW    = 20
-        const val POSTURE_STEP      = 5
-        const val BAD_LIMIT         = 3
-        const val REMINDER_INTERVAL = 30f
+        // MODEL 1 — Posture (pitch, trained 5 Hz, window=20 = 4 s)
+        // ESP32 is 50 Hz → downsample by keeping every 10th frame
+        const val POSTURE_DOWNSAMPLE = 10
+        const val POSTURE_WINDOW     = 20
+        const val POSTURE_STEP       = 5
+        const val BAD_LIMIT          = 3
+        const val REMINDER_INTERVAL  = 30f
 
-        // Fall detection — mirrors Python script values
-        const val FALL_WINDOW           = 75
-        const val FALL_STEP             = 25
-        const val IMPACT_THRESH         = 14f
-        const val STILL_THRESH          = 15f
-        const val STILL_NEEDED          = 5
-        const val FALL_COOLDOWN         = 2_000L
+        // MODEL 2 — Fall (all signals, trained 50 Hz, window=75 = 1.5 s)
+        const val FALL_WINDOW  = 75
+        const val FALL_STEP    = 25
+        const val IMPACT_THRESH = 14f
+        const val STILL_THRESH  = 15f
+        const val STILL_NEEDED  = 5
+        const val FALL_COOLDOWN = 2_000L
+
+        // Popup + email only after this many consecutive confirmed falls
         const val CONTINUOUS_FALL_LIMIT = 10
 
         const val AUTO_SAVE_INTERVAL_MS = 5 * 60 * 1000L
         const val PITCH_LOG_INTERVAL_MS = 5_000L
-        const val GPS_WAIT_MAX_MS       = 10_000L
-        const val GPS_CHECK_MS          = 500L
+
+        // GPS via LocationManager
+        const val GPS_MIN_TIME_MS    = 3_000L   // update every 3 s
+        const val GPS_MIN_DISTANCE_M = 0f       // update on any movement
+        const val GPS_WAIT_STEP_MS   =   500L
+        const val GPS_WAIT_MAX_MS    = 10_000L  // max wait for first fix
     }
 
     // =========================================================================
     // PRIVATE VARS
     // =========================================================================
-    private val postureBuffer             = ArrayDeque<Float>()
-    private var frameCounter              = 0
-    private var badCounter                = 0
-    private var alertActive               = false
-    private var lastAlertTime             = 0f
-    private val fallBuffer                = ArrayDeque<FallDetector.FallSample>()
-    private var fallCounter               = 0
-    private var stillCounter              = 0
-    private var lastFallAlert             = 0L
+    private val postureBuffer           = ArrayDeque<Float>()
+    private var rawFrameCounter         = 0
+    private var downsampledFrameCounter = 0
+    private var badCounter              = 0
+    private var alertActive             = false
+    private var lastAlertTime           = 0f
+
+    private val fallBuffer    = ArrayDeque<FallDetector.FallSample>()
+    private var fallRawCounter = 0
+    private var stillCounter   = 0
+    private var lastFallAlert  = 0L
+
     private var consecutiveFallDetections = 0
-    private var lastAutoSaveTime          = System.currentTimeMillis()
-    private var motorRunning              = false
+    private var lastAutoSaveTime = System.currentTimeMillis()
+    private var motorRunning     = false
+    private var emailSending     = false
 
     private lateinit var classifier:   PostureClassifier
     private lateinit var fallDetector: FallDetector
@@ -164,18 +177,60 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     // =========================================================================
+    // GPS — Using Android LocationManager directly
+    //
+    // WHY NOT FusedLocationProviderClient:
+    //   fusedLocationClient.lastLocation returns NULL when no other app has
+    //   recently used GPS (very common on fresh boots or when Maps isn't open).
+    //   FusedLocationProviderClient also has issues when BLUETOOTH_SCAN is
+    //   declared with neverForLocation flag.
+    //
+    // FIX — Use Android's LocationManager API directly:
+    //   • requestLocationUpdates() turns on the GPS hardware directly
+    //   • Works independently of Play Services and BLE permission flags
+    //   • getLastKnownLocation() returns the last hardware fix (more reliable)
+    //   • We request from both GPS_PROVIDER and NETWORK_PROVIDER so we get
+    //     a fix even indoors (cell/wifi triangulation as fallback)
+    // =========================================================================
+    private val locationManager by lazy {
+        getApplication<Application>().getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    }
+
+    private val gpsLocationListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            lastKnownLocation.value = location
+            Log.d(TAG, "GPS fix: lat=${location.latitude} lon=${location.longitude} acc=${location.accuracy}m provider=${location.provider}")
+        }
+        // Required on older APIs
+        @Suppress("OVERRIDE_DEPRECATION")
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        override fun onProviderEnabled(provider: String)  {}
+        override fun onProviderDisabled(provider: String) {
+            Log.w(TAG, "GPS provider disabled: $provider")
+        }
+    }
+
+    private val networkLocationListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            // Only use network fix if we don't have a GPS fix yet
+            if (lastKnownLocation.value == null) {
+                lastKnownLocation.value = location
+                Log.d(TAG, "Network fix (fallback): lat=${location.latitude} lon=${location.longitude}")
+            }
+        }
+        @Suppress("OVERRIDE_DEPRECATION")
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+        override fun onProviderEnabled(provider: String)  {}
+        override fun onProviderDisabled(provider: String) {}
+    }
+
+    private var gpsListenersRegistered = false
+
+    // =========================================================================
     // DEPENDENCIES
     // =========================================================================
     private val sessionRepository = SessionRepository()
 
-    private val fusedLocationClient by lazy {
-        LocationServices.getFusedLocationProviderClient(getApplication<Application>())
-    }
-    private var locationCallback: LocationCallback? = null
-
-    // ─── BleService now delivers raw ByteArray instead of String ─────────────
-    // onDataReceived receives the raw BLE characteristic bytes.
-    // If your BleService still delivers String, see note in parseFullSensorData.
     private val bleService = BleService(
         context            = getApplication(),
         onStatusChange     = { status.value = it },
@@ -190,13 +245,12 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
                 motorRunning = false
             }
         },
-        onDataReceived = { raw ->
-            // raw is still String here so we pass it through to the parser.
-            // The parser now handles both the new 20-byte binary format
-            // (delivered as a raw ByteArray converted to String by BleService)
-            // and the legacy CSV fallback.
-            data.add(0, raw)
-            parseFullSensorData(raw)
+        onDataReceived = { bytes ->
+            val hex = bytes.take(8).joinToString(" ") { "%02X".format(it) } +
+                    if (bytes.size > 8) "..." else ""
+            data.add(0, "[${bytes.size}B] $hex")
+            if (data.size > 200) data.removeAt(data.lastIndex)
+            parseBlePacket(bytes)
         }
     )
 
@@ -231,17 +285,15 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // =========================================================================
-    // BT RECEIVER
+    // BT STATE RECEIVER
     // =========================================================================
     private val bluetoothStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
                 when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
                     BluetoothAdapter.STATE_OFF -> {
-                        status.value      = "Bluetooth OFF"
-                        isConnected.value = false
-                        motorRunning      = false
-                        stopPitchLogTimer()
+                        status.value = "Bluetooth OFF"; isConnected.value = false
+                        motorRunning = false; stopPitchLogTimer()
                     }
                     BluetoothAdapter.STATE_ON -> startScan()
                 }
@@ -264,6 +316,91 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // =========================================================================
+    // GPS — START / STOP
+    // Called from MainActivity.onCreate if permission already granted,
+    // and from onLocationPermissionResult when permission is newly granted.
+    // =========================================================================
+    @SuppressLint("MissingPermission")
+    fun startLocationUpdates() {
+        if (gpsListenersRegistered) return
+
+        val hasFine = ContextCompat.checkSelfPermission(
+            getApplication(), Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val hasCoarse = ContextCompat.checkSelfPermission(
+            getApplication(), Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!hasFine && !hasCoarse) {
+            Log.w(TAG, "startLocationUpdates: no location permission")
+            return
+        }
+
+        try {
+            val mainLooper = Looper.getMainLooper()
+
+            // GPS provider (outdoor — most accurate)
+            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                locationManager.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER,
+                    GPS_MIN_TIME_MS,
+                    GPS_MIN_DISTANCE_M,
+                    gpsLocationListener,
+                    mainLooper
+                )
+                // Grab last known fix immediately (may be non-null from previous session)
+                val lastGps = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                if (lastGps != null) {
+                    lastKnownLocation.value = lastGps
+                    Log.d(TAG, "Last GPS fix from cache: ${lastGps.latitude}, ${lastGps.longitude}")
+                }
+                Log.d(TAG, "GPS_PROVIDER updates started")
+            } else {
+                Log.w(TAG, "GPS_PROVIDER not enabled — falling back to network")
+            }
+
+            // Network provider (indoor fallback — cell/wifi triangulation)
+            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                locationManager.requestLocationUpdates(
+                    LocationManager.NETWORK_PROVIDER,
+                    GPS_MIN_TIME_MS,
+                    GPS_MIN_DISTANCE_M,
+                    networkLocationListener,
+                    mainLooper
+                )
+                // Use network fix as immediate fallback if no GPS fix yet
+                if (lastKnownLocation.value == null) {
+                    val lastNetwork = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                    if (lastNetwork != null) {
+                        lastKnownLocation.value = lastNetwork
+                        Log.d(TAG, "Last network fix from cache: ${lastNetwork.latitude}, ${lastNetwork.longitude}")
+                    }
+                }
+                Log.d(TAG, "NETWORK_PROVIDER updates started")
+            }
+
+            gpsListenersRegistered = true
+            Log.i(TAG, "Location updates started — current fix: ${lastKnownLocation.value}")
+
+        } catch (e: Exception) {
+            Log.e(TAG, "startLocationUpdates: ${e.message}")
+        }
+    }
+
+    private fun stopLocationUpdates() {
+        if (!gpsListenersRegistered) return
+        try {
+            locationManager.removeUpdates(gpsLocationListener)
+            locationManager.removeUpdates(networkLocationListener)
+            gpsListenersRegistered = false
+            Log.d(TAG, "Location updates stopped")
+        } catch (e: Exception) {
+            Log.e(TAG, "stopLocationUpdates: ${e.message}")
+        }
+    }
+
+    // =========================================================================
     // FIREBASE
     // =========================================================================
     fun loadPitchDataFromFirebase(days: Int = 30) {
@@ -271,9 +408,7 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
             isLoadingData.value = true
             try {
                 val loaded = withContext(Dispatchers.IO) { sessionRepository.loadPitchRange(days) }
-                pitchData.clear()
-                pitchData.addAll(loaded)
-                Log.d(TAG, "Pitch loaded: ${loaded.size} records")
+                pitchData.clear(); pitchData.addAll(loaded)
             } catch (e: Exception) {
                 Log.e(TAG, "loadPitchData: ${e.message}")
             } finally {
@@ -283,15 +418,13 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun autoSaveSessionSnapshot() {
-        val good = sessionGoodCount.value
-        val bad  = sessionBadCount.value
+        val good = sessionGoodCount.value; val bad = sessionBadCount.value
         if (good + bad == 0) return
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 sessionRepository.saveSession(PostureSession(
                     date            = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
-                    goodCount       = good,
-                    badCount        = bad,
+                    goodCount       = good, badCount = bad,
                     avgPitch        = currentPitch.value,
                     durationSeconds = (System.currentTimeMillis() - sessionStartTime.value) / 1000L
                 ))
@@ -300,131 +433,65 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun saveCurrentSession() {
-        val good = sessionGoodCount.value
-        val bad  = sessionBadCount.value
+        val good = sessionGoodCount.value; val bad = sessionBadCount.value
         if (good + bad == 0) return
         val session = PostureSession(
             date            = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()),
-            goodCount       = good,
-            badCount        = bad,
+            goodCount       = good, badCount = bad,
             avgPitch        = currentPitch.value,
             durationSeconds = (System.currentTimeMillis() - sessionStartTime.value) / 1000L
         )
         postureSessions.add(0, session)
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) { sessionRepository.saveSession(session) }
-        }
-        sessionGoodCount.value = 0
-        sessionBadCount.value  = 0
+        viewModelScope.launch { withContext(Dispatchers.IO) { sessionRepository.saveSession(session) } }
+        sessionGoodCount.value = 0; sessionBadCount.value = 0
         sessionStartTime.value = System.currentTimeMillis()
         lastAutoSaveTime       = System.currentTimeMillis()
     }
 
     // =========================================================================
-    // SENSOR PARSER
-    //
-    // ESP32 binary packet (20 bytes, little-endian):
-    //   byte  0-3  : timestamp  uint32  (unused in ML)
-    //   byte  4-5  : pitch      int16   ÷ 100
-    //   byte  6-7  : roll       int16   ÷ 100
-    //   byte  8-9  : Ax         int16   ÷ 100
-    //   byte 10-11 : Ay         int16   ÷ 100
-    //   byte 12-13 : Az         int16   ÷ 100
-    //   byte 14-15 : Gx         int16   ÷ 10
-    //   byte 16-17 : Gy         int16   ÷ 10
-    //   byte 18-19 : Gz         int16   ÷ 10
-    //   acc_mag derived: sqrt(ax²+ay²+az²)
-    //
-    // If BleService delivers a ByteArray directly, call parseBinaryPacket().
-    // If BleService still wraps bytes in a String, use parseFullSensorData()
-    // which detects the packet size and routes accordingly.
+    // BLE PACKET PARSER
     // =========================================================================
-
-    /** Call this if your BleService delivers raw ByteArray from the characteristic. */
-    fun parseBinaryPacket(bytes: ByteArray) {
-        val sample = fallDetector.decodeBlePacket(bytes) ?: return
-        onSampleDecoded(sample)
-    }
-
-    /** Legacy entry point — called from onDataReceived(String). */
-    private fun parseFullSensorData(rawString: String) {
+    private fun parseBlePacket(bytes: ByteArray) {
         try {
-            // ── Try binary path first ─────────────────────────────────────────
-            // BleService may have decoded the characteristic bytes into a
-            // Latin-1/ISO-8859-1 string. Re-encode to get the raw bytes back.
-            val asBytes = rawString.toByteArray(Charsets.ISO_8859_1)
-            if (asBytes.size == FallDetector.PACKET_SIZE) {
-                val sample = fallDetector.decodeBlePacket(asBytes)
-                if (sample != null) {
-                    onSampleDecoded(sample)
-                    return
-                }
+            if (bytes.size == FallDetector.PACKET_SIZE) {
+                val sample = fallDetector.decodeBlePacket(bytes)
+                if (sample != null) { onSampleDecoded(sample); return }
             }
-
-            // ── CSV fallback (legacy / debug mode) ────────────────────────────
-            val parts = rawString.trim().split(",")
-            if (parts.size >= 10) {
-                val ax     = parts[3].trim().toFloatOrNull() ?: 0f
-                val ay     = parts[4].trim().toFloatOrNull() ?: 0f
-                val az     = parts[5].trim().toFloatOrNull() ?: 0f
-                // Use transmitted acc_mag if present, otherwise derive it
-                val accMag = parts[6].trim().toFloatOrNull()
-                    ?: kotlin.math.sqrt(ax * ax + ay * ay + az * az)
+            val parts = bytes.decodeToString().trim().split(",")
+            if (parts.size >= 9) {
+                val ax = parts[3].trim().toFloatOrNull() ?: 0f
+                val ay = parts[4].trim().toFloatOrNull() ?: 0f
+                val az = parts[5].trim().toFloatOrNull() ?: 0f
                 onSampleDecoded(FallDetector.FallSample(
                     pitch  = parts[1].trim().toFloatOrNull() ?: 0f,
                     roll   = parts[2].trim().toFloatOrNull() ?: 0f,
-                    ax     = ax,
-                    ay     = ay,
-                    az     = az,
-                    accMag = accMag,
-                    gx     = parts[7].trim().toFloatOrNull() ?: 0f,
-                    gy     = parts[8].trim().toFloatOrNull() ?: 0f,
-                    gz     = parts[9].trim().toFloatOrNull() ?: 0f
-                ))
-                return
-            }
-
-            // ── Pitch-only fallback ───────────────────────────────────────────
-            val pitchOnly = parts[0].trim()
-                .replace(Regex("[^0-9.\\-]"), "").toFloatOrNull()
-            if (pitchOnly != null && pitchOnly > -90f && pitchOnly < 90f) {
-                val tilt = kotlin.math.abs(pitchOnly) > 60f
-                onSampleDecoded(FallDetector.FallSample(
-                    pitch  = pitchOnly, roll   = 0f,
-                    ax     = 0f,        ay     = 0f,
-                    az     = if (tilt) 20f else 9.8f,
-                    accMag = if (tilt) IMPACT_THRESH + 2f else 9.8f,
-                    gx     = if (tilt) 20f else 5f,
-                    gy     = 0f,        gz     = 0f
+                    ax = ax, ay = ay, az = az,
+                    accMag = sqrt(ax * ax + ay * ay + az * az),
+                    gx     = parts[6].trim().toFloatOrNull() ?: 0f,
+                    gy     = parts[7].trim().toFloatOrNull() ?: 0f,
+                    gz     = parts[8].trim().toFloatOrNull() ?: 0f
                 ))
             }
-
-        } catch (e: Exception) {
-            Log.e(TAG, "parseFullSensorData: ${e.message}")
-        }
+        } catch (e: Exception) { Log.e(TAG, "parseBlePacket: ${e.message}") }
     }
 
     // =========================================================================
-    // SINGLE DECODED SAMPLE HANDLER
-    // All three decode paths converge here.
+    // SAMPLE HANDLER
     // =========================================================================
     private fun onSampleDecoded(sample: FallDetector.FallSample) {
         val pitch = sample.pitch
+        rawFrameCounter++
 
-        // ── Posture pipeline ──────────────────────────────────────────────────
-        if (pitch > -90f && pitch < 90f) {
+        // Posture: 50 Hz → 5 Hz (keep every 10th frame)
+        if (rawFrameCounter % POSTURE_DOWNSAMPLE == 0 && pitch > -90f && pitch < 90f) {
             currentPitch.value = pitch
-            postureBuffer.apply {
-                if (size >= POSTURE_WINDOW) removeFirst()
-                addLast(pitch)
-            }
-            frameCounter++
-            if (postureBuffer.size >= POSTURE_WINDOW && frameCounter % POSTURE_STEP == 0) {
-                runPostureML()
-            }
+            postureBuffer.apply { if (size >= POSTURE_WINDOW) removeFirst(); addLast(pitch) }
+            downsampledFrameCounter++
+            if (postureBuffer.size >= POSTURE_WINDOW &&
+                downsampledFrameCounter % POSTURE_STEP == 0) runPostureML()
         }
 
-        // ── Fall pipeline ─────────────────────────────────────────────────────
+        // Fall: raw 50 Hz
         runFallDetection(sample)
     }
 
@@ -432,9 +499,8 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     // POSTURE ML
     // =========================================================================
     private fun runPostureML() {
-        val features   = FeatureExtractor.extract(postureBuffer.toList())
-        val prediction = classifier.classify(features)
-        handlePosturePrediction(prediction, System.currentTimeMillis() / 1000f)
+        val pred = classifier.classify(FeatureExtractor.extract(postureBuffer.toList()))
+        handlePosturePrediction(pred, System.currentTimeMillis() / 1000f)
     }
 
     private fun handlePosturePrediction(pred: Int, currentTime: Float) {
@@ -447,27 +513,20 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
             when {
                 badCounter >= BAD_LIMIT && !alertActive -> {
                     alertState.value = "⚠️ Sustained Bad Posture!"
-                    alertActive      = true
-                    lastAlertTime    = currentTime
-                    startVibrationIfEnabled()
+                    alertActive = true; lastAlertTime = currentTime; startVibrationIfEnabled()
                 }
                 alertActive && currentTime - lastAlertTime >= REMINDER_INTERVAL -> {
                     alertState.value = "🔔 Still Bad Posture!"
-                    lastAlertTime    = currentTime
-                    startVibrationIfEnabled()
+                    lastAlertTime = currentTime; startVibrationIfEnabled()
                 }
             }
         } else {
-            badCounter       = 0
-            alertActive      = false
-            alertState.value = ""
-            stopVibration()
+            badCounter = 0; alertActive = false; alertState.value = ""; stopVibration()
         }
 
         val now = System.currentTimeMillis()
         if (now - lastAutoSaveTime >= AUTO_SAVE_INTERVAL_MS) {
-            lastAutoSaveTime = now
-            autoSaveSessionSnapshot()
+            lastAutoSaveTime = now; autoSaveSessionSnapshot()
         }
     }
 
@@ -476,33 +535,25 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     // =========================================================================
     private fun startVibrationIfEnabled() {
         if (!settingsState.vibrationEnabled || !isConnected.value) return
-        send(settingsState.vibrationSequence.bleCommand)
-        motorRunning = true
+        send(settingsState.vibrationSequence.bleCommand); motorRunning = true
     }
-
     private fun stopVibration() {
-        if (!isConnected.value || !motorRunning) return
-        send("0")
-        motorRunning = false
+        if (!isConnected.value || !motorRunning) return; send("0"); motorRunning = false
     }
-
     private fun sendIntensity(level: Float) {
-        if (!isConnected.value) return
-        send("V${level.toInt().coerceIn(1, 100)}")
+        if (!isConnected.value) return; send("V${level.toInt().coerceIn(1, 100)}")
     }
 
     // =========================================================================
     // FALL DETECTION
     //
-    // Mirrors Python fall_testing.py:
-    //   impact      = acc_mag > 14
-    //   ml_detected = pred=="fall" AND prob >= 0.85
-    //   confirmed   = ml_detected AND (impact OR still >= 5)
+    // Popup + email fire ONLY after CONTINUOUS_FALL_LIMIT (10) consecutive
+    // confirmed falls. Counter does NOT reset on "safe" detections.
     // =========================================================================
     private fun runFallDetection(sample: FallDetector.FallSample) {
         if (fallBuffer.size >= FALL_WINDOW) fallBuffer.removeFirst()
         fallBuffer.addLast(sample)
-        fallCounter++
+        fallRawCounter++
 
         stillCounter = if (
             kotlin.math.abs(sample.gx) < STILL_THRESH &&
@@ -513,16 +564,14 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
         val mlResult = when {
             fallDetector.isModelLoaded &&
                     fallBuffer.size >= FALL_WINDOW &&
-                    fallCounter % FALL_STEP == 0 -> {
+                    fallRawCounter % FALL_STEP == 0 -> {
                 val r = fallDetector.classify(fallBuffer.toList())
                 if (r.fallProbability == 0f)
                     FallDetector.FallResult(r.label, if (r.label == "fall") 0.85f else 0.05f)
                 else r
             }
-            fallBuffer.size < FALL_WINDOW ->
-                fallDetector.thresholdFallback(fallBuffer.toList())
-            else ->
-                FallDetector.FallResult(fallLabel.value, fallProbability.value)
+            fallBuffer.size < FALL_WINDOW -> fallDetector.thresholdFallback(fallBuffer.toList())
+            else -> FallDetector.FallResult(fallLabel.value, fallProbability.value)
         }
 
         val impact     = sample.accMag > IMPACT_THRESH
@@ -534,98 +583,59 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
         fallLabel.value       = mlResult.label
         fallProbability.value = mlResult.fallProbability
 
-        Log.d(TAG, "Fall: label=${mlResult.label} " +
-                "prob=${"%.2f".format(mlResult.fallProbability)} " +
-                "accMag=${sample.accMag} still=$stillCounter " +
-                "impact=$impact mlDetected=$mlDetected confirmed=$confirmed")
+        // Badge: hidden when alert disabled
+        if (settingsState.fallAlertEnabled) {
+            fallLabelForUI.value = mlResult.label
+            fallProbForUI.value  = mlResult.fallProbability
+        } else {
+            fallLabelForUI.value = "safe"
+            fallProbForUI.value  = 0f
+        }
 
         if (confirmed) {
-            consecutiveFallDetections++
-            continuousFallCount.intValue = consecutiveFallDetections
-            lastFallAlert                = System.currentTimeMillis()
-            stillCounter                 = 0
-
-            Log.d(TAG, "🚨 FALL #$consecutiveFallDetections confirmed!")
+            lastFallAlert = System.currentTimeMillis()
+            stillCounter  = 0
 
             if (settingsState.fallAlertEnabled) {
-                fallDetected.value = true
-                if (settingsState.fallAlertEmail.isNotBlank() &&
-                    consecutiveFallDetections >= CONTINUOUS_FALL_LIMIT) {
-                    triggerFallAlertEmail()
+                consecutiveFallDetections++
+                continuousFallCount.intValue = consecutiveFallDetections
+                Log.d(TAG, "Fall confirmed: $consecutiveFallDetections / $CONTINUOUS_FALL_LIMIT")
+
+                if (consecutiveFallDetections >= CONTINUOUS_FALL_LIMIT) {
+                    fallDetected.value = true       // triggers popup
+                    if (settingsState.fallAlertEmail.isNotBlank() && !emailSending) {
+                        emailSending = true
+                        triggerFallAlertEmail()
+                    }
                     consecutiveFallDetections    = 0
                     continuousFallCount.intValue = 0
                 }
             }
-        } else if (mlResult.label == "safe") {
-            consecutiveFallDetections    = 0
-            continuousFallCount.intValue = 0
         }
     }
 
     // =========================================================================
-    // GPS
-    // =========================================================================
-    @SuppressLint("MissingPermission")
-    private fun fetchLastLocation() {
-        try {
-            fusedLocationClient.lastLocation
-                .addOnSuccessListener { loc ->
-                    if (loc != null) lastKnownLocation.value = loc
-                    else requestFreshLocation()
-                }
-                .addOnFailureListener { requestFreshLocation() }
-        } catch (e: Exception) { Log.e(TAG, "fetchLastLocation: ${e.message}") }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun requestFreshLocation() {
-        try {
-            val cb = object : LocationCallback() {
-                override fun onLocationResult(r: LocationResult) {
-                    r.lastLocation?.let { lastKnownLocation.value = it }
-                    fusedLocationClient.removeLocationUpdates(this)
-                }
-            }
-            fusedLocationClient.requestLocationUpdates(
-                LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000L)
-                    .setMaxUpdates(1).setWaitForAccurateLocation(false).build(),
-                cb, Looper.getMainLooper()
-            )
-        } catch (e: Exception) { Log.e(TAG, "requestFreshLocation: ${e.message}") }
-    }
-
-    @SuppressLint("MissingPermission")
-    private fun startLocationUpdates() {
-        try {
-            locationCallback = object : LocationCallback() {
-                override fun onLocationResult(r: LocationResult) {
-                    r.lastLocation?.let { lastKnownLocation.value = it }
-                }
-            }
-            fusedLocationClient.requestLocationUpdates(
-                LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2000L).build(),
-                locationCallback!!, Looper.getMainLooper()
-            )
-        } catch (e: Exception) { Log.e(TAG, "startLocationUpdates: ${e.message}") }
-    }
-
-    private fun stopLocationUpdates() {
-        locationCallback?.let { fusedLocationClient.removeLocationUpdates(it); locationCallback = null }
-    }
-
-    // =========================================================================
-    // FALL EMAIL
+    // FALL ALERT EMAIL
+    //
+    // GPS strategy:
+    //   lastKnownLocation is updated every 3 s by LocationManager.
+    //   At email time we read it immediately — no waiting needed in most cases.
+    //   If it's still null (first boot, GPS cold start) we wait up to 10 s.
     // =========================================================================
     private fun triggerFallAlertEmail() {
         val email = settingsState.fallAlertEmail
-        if (email.isBlank()) return
-        emailSentStatus.value = "📍 Getting GPS location..."
+        if (email.isBlank()) { emailSending = false; return }
+
+        emailSentStatus.value = "Getting GPS location..."
+
         viewModelScope.launch {
-            fetchLastLocation()
+            // Wait for a fix if we don't have one yet (GPS cold start edge case)
             var waited = 0L
             while (lastKnownLocation.value == null && waited < GPS_WAIT_MAX_MS) {
-                delay(GPS_CHECK_MS); waited += GPS_CHECK_MS
+                delay(GPS_WAIT_STEP_MS); waited += GPS_WAIT_STEP_MS
+                Log.d(TAG, "Waiting for GPS fix... ${waited}ms")
             }
+
             val location  = lastKnownLocation.value
             val time      = SimpleDateFormat("dd MMM yyyy, HH:mm:ss", Locale.getDefault()).format(Date())
             val latitude  = location?.latitude?.let  { "%.6f".format(it) } ?: "Unavailable"
@@ -633,16 +643,27 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
             val mapsLink  = if (location != null)
                 "https://maps.google.com/?q=${location.latitude},${location.longitude}"
             else "https://maps.google.com"
-            emailSentStatus.value = "📤 Sending emergency email..."
+
+            Log.d(TAG, "Sending email — lat=$latitude lon=$longitude waited=${waited}ms")
+            emailSentStatus.value = "Sending emergency email..."
+
             val success = withContext(Dispatchers.IO) {
                 EmailService.sendFallAlert(
-                    toEmail   = email, time = time,
-                    latitude  = latitude, longitude = longitude,
-                    mapsLink  = mapsLink, fallCount = CONTINUOUS_FALL_LIMIT
+                    toEmail   = email,
+                    time      = time,
+                    latitude  = latitude,
+                    longitude = longitude,
+                    mapsLink  = mapsLink,
+                    fallCount = CONTINUOUS_FALL_LIMIT
                 )
             }
-            emailSentStatus.value = if (success) "✅ Emergency email sent to $email"
-            else "❌ Email failed — check credentials in EmailService.kt"
+
+            emailSentStatus.value = if (success)
+                "Emergency email sent to $email"
+            else
+                "Email failed — check credentials in EmailService.kt"
+
+            emailSending = false
             delay(5000)
             emailSentStatus.value = ""
         }
@@ -659,30 +680,26 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissFallAlert()   { fallDetected.value = false }
 
     fun calibrate() {
-        isCalibrating.value = true
-        send("C1")
+        isCalibrating.value = true; send("C1")
         Handler(Looper.getMainLooper()).postDelayed({ isCalibrating.value = false }, 3000)
     }
 
     fun sendEmailManually() {
-        if (!settingsState.fallAlertEnabled) { emailSentStatus.value = "⚠️ Enable Fall Alert in Settings first"; return }
-        if (settingsState.fallAlertEmail.isBlank()) { emailSentStatus.value = "⚠️ No email configured in Settings"; return }
-        if (emailSentStatus.value.startsWith("📤") || emailSentStatus.value.startsWith("📍")) return
-        triggerFallAlertEmail()
+        if (!settingsState.fallAlertEnabled) { emailSentStatus.value = "Enable Fall Alert in Settings first"; return }
+        if (settingsState.fallAlertEmail.isBlank()) { emailSentStatus.value = "No email configured"; return }
+        if (emailSending) return
+        emailSending = true; triggerFallAlertEmail()
     }
 
     fun onVibrationToggled(enabled: Boolean) {
         settingsState = settingsState.copy(vibrationEnabled = enabled)
         if (enabled) sendIntensity(settingsState.vibrationLevel) else { send("0"); motorRunning = false }
     }
-
     fun onVibrationLevelChanged(level: Float) {
         settingsState = settingsState.copy(vibrationLevel = level)
         if (settingsState.vibrationEnabled && isConnected.value) sendIntensity(level)
     }
-
     fun onVibrationLevelFinished() {}
-
     fun onVibrationSequenceChanged(sequence: VibrationSequence) {
         settingsState = settingsState.copy(vibrationSequence = sequence)
         if (settingsState.vibrationEnabled && isConnected.value) { send(sequence.bleCommand); motorRunning = true }
@@ -691,12 +708,14 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     fun onFallAlertToggled(enabled: Boolean) {
         if (enabled) {
             if (!locationPermissionGranted.value) { requestLocationPermission(); return }
-            fetchLastLocation(); startLocationUpdates()
             showEmailInputDialog.value = true
         } else {
-            settingsState      = settingsState.copy(fallAlertEnabled = false)
-            fallDetected.value = false
-            stopLocationUpdates()
+            settingsState                = settingsState.copy(fallAlertEnabled = false)
+            fallDetected.value           = false
+            fallLabelForUI.value         = "safe"
+            fallProbForUI.value          = 0f
+            consecutiveFallDetections    = 0
+            continuousFallCount.intValue = 0
         }
     }
 
@@ -704,7 +723,6 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
         if (email.isNotBlank()) settingsState = settingsState.copy(fallAlertEnabled = true, fallAlertEmail = email)
         showEmailInputDialog.value = false
     }
-
     fun onFallAlertEmailChanged(email: String) {
         settingsState = settingsState.copy(fallAlertEmail = email)
     }
@@ -712,16 +730,24 @@ class BleViewModel(application: Application) : AndroidViewModel(application) {
     fun onLocationPermissionResult(granted: Boolean) {
         locationPermissionGranted.value = granted
         showLocationPermDialog.value    = false
-        if (!granted) settingsState = settingsState.copy(fallAlertEnabled = false)
+        if (granted) {
+            // Start GPS hardware immediately when permission is confirmed
+            startLocationUpdates()
+        } else {
+            settingsState = settingsState.copy(fallAlertEnabled = false)
+        }
     }
 
     fun requestLocationPermission() { showLocationPermDialog.value = true }
 
     override fun onCleared() {
         super.onCleared()
-        stopPitchLogTimer(); stopLocationUpdates(); saveCurrentSession()
+        stopPitchLogTimer()
+        stopLocationUpdates()
+        saveCurrentSession()
         if (isConnected.value) send("0")
-        bleService.cleanup(); fallDetector.close()
+        bleService.cleanup()
+        fallDetector.close()
         getApplication<Application>().unregisterReceiver(bluetoothStateReceiver)
     }
 }
