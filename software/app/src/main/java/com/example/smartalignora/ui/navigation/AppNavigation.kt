@@ -16,9 +16,9 @@ object Routes {
     const val SIGN_UP       = "sign_up"
     const val HOME          = "home"
     const val ANALYSIS      = "analysis"
-
-    const val SETTINGS = "settings"
-    const val PROFILE  = "profile"
+    const val SETTINGS      = "settings"
+    const val PROFILE       = "profile"
+    const val FALL_PLAYER   = "fall_player"
 }
 
 @Composable
@@ -28,7 +28,9 @@ fun AppNavigation() {
     NavHost(navController = navController, startDestination = Routes.SPLASH) {
 
         composable(Routes.SPLASH) {
-            SplashScreen(onNavigateToAbout = { navController.navigate(Routes.ABOUT) })
+            SplashScreen(
+                onNavigateToAbout = { navController.navigate(Routes.ABOUT) }
+            )
         }
 
         composable(Routes.ABOUT) {
@@ -74,12 +76,13 @@ fun AppNavigation() {
                 onLogin = { navController.popBackStack() }
             )
         }
-// Update HOME:
+
         composable(Routes.HOME) {
             HomeScreen(
-                onNavigateToAnalysis = { navController.navigate(Routes.ANALYSIS) },
-                onNavigateToSettings = { navController.navigate(Routes.SETTINGS) },
-                onNavigateToProfile  = { navController.navigate(Routes.PROFILE) }
+                onNavigateToAnalysis   = { navController.navigate(Routes.ANALYSIS) },
+                onNavigateToSettings   = { navController.navigate(Routes.SETTINGS) },
+                onNavigateToProfile    = { navController.navigate(Routes.PROFILE) },
+                onNavigateToFallPlayer = { navController.navigate(Routes.FALL_PLAYER) }
             )
         }
 
@@ -89,20 +92,23 @@ fun AppNavigation() {
             )
         }
 
-
-// Add Settings:
         composable(Routes.SETTINGS) {
             SettingsScreen(
-                onBack = { navController.popBackStack() },
+                onBack   = { navController.popBackStack() },
                 onLogout = { navController.navigate(Routes.LOGIN) }
             )
         }
 
-// Add Profile:
         composable(Routes.PROFILE) {
             ProfileScreen(
-                onBack = { navController.popBackStack() },
+                onBack               = { navController.popBackStack() },
                 onNavigateToSettings = { navController.navigate(Routes.SETTINGS) }
+            )
+        }
+
+        composable(Routes.FALL_PLAYER) {
+            FallDataPlayerScreen(
+                onBack = { navController.popBackStack() }
             )
         }
     }

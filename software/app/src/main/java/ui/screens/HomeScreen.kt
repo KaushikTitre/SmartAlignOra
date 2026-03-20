@@ -1,6 +1,5 @@
 package com.example.smartalignora.ui.screens
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -18,27 +17,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 private val HomePurple      = Color(0xFF6B21A8)
-private val HomePurpleMid   = Color(0xFF9333EA)
 private val HomePurpleLight = Color(0xFFF3E8FF)
-private val HomePurpleCard  = Color(0xFFFAF5FF)
 private val HomeBg          = Color(0xFFF8F4FF)
 private val HomeTextDark    = Color(0xFF1A1A2E)
 private val HomeTextGray    = Color(0xFF6B7280)
-private val HomeBarLight    = Color(0xFFDDD6FE)
 
+// ── HomeScreen ────────────────────────────────────────────────────────────────
 @Composable
 fun HomeScreen(
-    onNavigateToAnalysis: () -> Unit = {},
-    onNavigateToSettings: () -> Unit = {},
-    onNavigateToProfile: () -> Unit = {}
+    onNavigateToAnalysis:   () -> Unit = {},
+    onNavigateToSettings:   () -> Unit = {},
+    onNavigateToProfile:    () -> Unit = {},
+    onNavigateToFallPlayer: () -> Unit = {}   // ← added
 ) {
     var selectedTab by remember { mutableStateOf(0) }
     val scrollState = rememberScrollState()
@@ -68,12 +64,18 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(20.dp))
             HomeTopBar()
             Spacer(modifier = Modifier.height(20.dp))
-            ConnectDeviceCard()
+
+            // Pass callback into card
+            ConnectDeviceCard(
+                onNavigateToFallPlayer = onNavigateToFallPlayer
+            )
+
             Spacer(modifier = Modifier.height(24.dp))
         }
     }
 }
 
+// ── Top Bar ───────────────────────────────────────────────────────────────────
 @Composable
 fun HomeTopBar() {
     Row(
@@ -101,8 +103,11 @@ fun HomeTopBar() {
     }
 }
 
+// ── Connect Device Card ───────────────────────────────────────────────────────
 @Composable
-fun ConnectDeviceCard() {
+fun ConnectDeviceCard(
+    onNavigateToFallPlayer: () -> Unit = {}   // ← added
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -115,6 +120,7 @@ fun ConnectDeviceCard() {
             modifier = Modifier.padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Title row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -128,9 +134,20 @@ fun ConnectDeviceCard() {
                     fontWeight = FontWeight.Bold
                 )
             }
+
             Spacer(modifier = Modifier.height(20.dp))
-            HomePostureCircle()
+
+            // 3D Posture Animation
+            PostureAnimationScreen(
+                currentPitch    = 0f,
+                currentRoll     = 0f,
+                fallLabel       = "safe",
+                fallProbability = 0f
+            )
+
             Spacer(modifier = Modifier.height(20.dp))
+
+            // Controls row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
@@ -151,7 +168,10 @@ fun ConnectDeviceCard() {
                 }
                 HomeDeviceControl(emoji = "⏱️", label = "Delay")
             }
+
             Spacer(modifier = Modifier.height(20.dp))
+
+            // Connection status row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -173,73 +193,40 @@ fun ConnectDeviceCard() {
                     colors = ButtonDefaults.buttonColors(containerColor = HomePurple),
                     contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
                 ) {
-                    Text(text = "Pair Now", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(
+                        text = "Pair Now",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
                 }
             }
-        }
-    }
-}
 
-@Composable
-fun HomePostureCircle() {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier.size(200.dp)
-    ) {
-        Canvas(modifier = Modifier.size(200.dp)) {
-            val strokeWidth = 12.dp.toPx()
-            val radius = (size.minDimension - strokeWidth) / 2
-            drawCircle(
-                color = Color(0xFFE8F5E9),
-                radius = radius,
-                style = Stroke(width = strokeWidth)
-            )
-            drawArc(
-                color = Color(0xFF4CAF50),
-                startAngle = -210f,
-                sweepAngle = 280f,
-                useCenter = false,
-                style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-            )
-        }
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(160.dp)
-                .clip(CircleShape)
-                .background(Color(0xFFF1F8E9))
-        ) {
-            Box(
-                contentAlignment = Alignment.TopCenter,
-                modifier = Modifier.width(80.dp).height(110.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(30.dp)
-                        .align(Alignment.TopCenter)
-                        .clip(CircleShape)
-                        .background(Color(0xFF4CAF50))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Fall Detection Test button
+            Button(
+                onClick = onNavigateToFallPlayer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFDC2626)
                 )
-                Box(
-                    modifier = Modifier
-                        .width(36.dp)
-                        .height(60.dp)
-                        .align(Alignment.BottomCenter)
-                        .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-                        .background(Color(0xFF4CAF50))
+            ) {
+                Text(
+                    text = "▶ Test Fall Detection",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
                 )
             }
         }
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .offset(x = 20.dp, y = 8.dp)
-        ) {
-            Text(text = "❤️", fontSize = 12.sp)
-        }
     }
 }
 
+// ── Device Control Item ───────────────────────────────────────────────────────
 @Composable
 fun HomeDeviceControl(emoji: String, label: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -257,7 +244,7 @@ fun HomeDeviceControl(emoji: String, label: String) {
     }
 }
 
-
+// ── Bottom Navigation Bar ─────────────────────────────────────────────────────
 @Composable
 fun HomeBottomBar(selectedTab: Int, onTabSelected: (Int) -> Unit) {
     NavigationBar(
@@ -273,27 +260,34 @@ fun HomeBottomBar(selectedTab: Int, onTabSelected: (Int) -> Unit) {
         items.forEachIndexed { index, (label, icon) ->
             NavigationBarItem(
                 selected = selectedTab == index,
-                onClick = { onTabSelected(index) },
-                icon = { Icon(imageVector = icon, contentDescription = label, modifier = Modifier.size(24.dp)) },
+                onClick  = { onTabSelected(index) },
+                icon = {
+                    Icon(
+                        imageVector        = icon,
+                        contentDescription = label,
+                        modifier           = Modifier.size(24.dp)
+                    )
+                },
                 label = {
                     Text(
-                        text = label,
-                        fontSize = 11.sp,
+                        text       = label,
+                        fontSize   = 11.sp,
                         fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
                     )
                 },
                 colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = HomePurple,
-                    selectedTextColor = HomePurple,
+                    selectedIconColor   = HomePurple,
+                    selectedTextColor   = HomePurple,
                     unselectedIconColor = HomeTextGray,
                     unselectedTextColor = HomeTextGray,
-                    indicatorColor = HomePurpleLight
+                    indicatorColor      = HomePurpleLight
                 )
             )
         }
     }
 }
 
+// ── Preview ───────────────────────────────────────────────────────────────────
 @Preview(showBackground = true, showSystemUi = true)
 @Composable
 private fun HomeScreenPreview() {
