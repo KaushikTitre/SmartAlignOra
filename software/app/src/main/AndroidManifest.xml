@@ -19,16 +19,17 @@
 
     <!-- Location for BLE scan Android 11 and GPS fall alert -->
     <!-- Location -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
     <!-- PDF export Android 9 and below only -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
-<!--    for email -->
+    <!--    for email -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
     <!-- ─── Application ─────────────────────────────────────── -->

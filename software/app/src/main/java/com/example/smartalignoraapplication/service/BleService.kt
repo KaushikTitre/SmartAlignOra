@@ -25,13 +25,18 @@ class BleService(
     private val context:            Context,
     private val onStatusChange:     (String) -> Unit,
     private val onConnectionChange: (Boolean) -> Unit,
-    private val onDataReceived:     (ByteArray) -> Unit   // ← ByteArray, not String
-) {
+    private val onDataReceived:     (ByteArray) -> Unit,
+    private val onBatteryReceived:  (Int) -> Unit        // ← ADD THIS
+){
 
     private val SERVICE_UUID = UUID.fromString("a32be81d-570e-4ad9-bf2a-64fdfe3db515")
     private val WRITE_UUID   = UUID.fromString("c6b0278a-f9b5-4306-8eee-5d74d746bcc3")
     private val NOTIFY_UUID  = UUID.fromString("b3af0550-1ba9-4efb-aac7-14287a527e06")
     private val CCCD_UUID    = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+
+    // Add these two UUIDs alongside your existing ones at the top of BleService class:
+    private val BATTERY_SERVICE_UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
+    private val BATTERY_LEVEL_UUID   = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
 
     private val bluetoothManager =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
@@ -175,7 +180,39 @@ class BleService(
                     writeCharacteristic(g, writeChar, ts)
                 }, 200)
             }
+
+
+            // ── NEW: Subscribe to standard BLE Battery Service ────────────────────
+            handler.postDelayed({
+                val batterySvc  = g.getService(BATTERY_SERVICE_UUID)
+                val batteryChar = batterySvc?.getCharacteristic(BATTERY_LEVEL_UUID)
+                if (batteryChar != null) {
+                    // Initial read
+                    g.readCharacteristic(batteryChar)
+                    // Subscribe to notifications for automatic updates
+                    g.setCharacteristicNotification(batteryChar, true)
+                    val battDesc = batteryChar.getDescriptor(CCCD_UUID)
+                    battDesc?.let {
+                        @Suppress("DEPRECATION")
+                        it.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            g.writeDescriptor(it, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            g.writeDescriptor(it)
+                        }
+                    }
+                    Log.d("BleService", "Battery Service subscribed")
+                } else {
+                    Log.d("BleService", "Battery Service not found on device")
+                }
+            }, 600)
         }
+
+
+
+
+
 
         // ── API 33+ (Android 13+) — preferred binary callback ────────────────
         // This fires on Android 13+ with the raw byte value directly.
@@ -184,10 +221,15 @@ class BleService(
         override fun onCharacteristicChanged(
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
-            value: ByteArray                                   // API 33+ override
+            value: ByteArray
         ) {
+            if (characteristic.uuid == BATTERY_LEVEL_UUID) {
+                val pct = value.firstOrNull()?.toInt()?.and(0xFF) ?: return
+                Log.d("BleService", "Battery notify (API33): $pct%")
+                handler.post { onBatteryReceived(pct.coerceIn(0, 100)) }
+                return
+            }
             val bytes = value.copyOf()
-            Log.v("BleService", "BLE packet (API33+): ${bytes.size} bytes")
             handler.post { onDataReceived(bytes) }
         }
 
@@ -199,12 +241,50 @@ class BleService(
             g: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
-            // Guard: don't double-fire on API 33+ (the above override is called instead)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
+            if (characteristic.uuid == BATTERY_LEVEL_UUID) {
+                val pct = characteristic.value?.firstOrNull()?.toInt()?.and(0xFF) ?: return
+                Log.d("BleService", "Battery notify (legacy): $pct%")
+                handler.post { onBatteryReceived(pct.coerceIn(0, 100)) }
+                return
+            }
             val bytes = characteristic.value?.copyOf() ?: return
-            Log.v("BleService", "BLE packet (legacy): ${bytes.size} bytes")
             handler.post { onDataReceived(bytes) }
         }
+
+
+
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicRead(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
+            if (status == BluetoothGatt.GATT_SUCCESS &&
+                characteristic.uuid == BATTERY_LEVEL_UUID) {
+                val pct = characteristic.value?.firstOrNull()?.toInt()?.and(0xFF) ?: return
+                Log.d("BleService", "Battery read: $pct%")
+                handler.post { onBatteryReceived(pct.coerceIn(0, 100)) }
+            }
+        }
+
+        // ── API 33+ read response ─────────────────────────────────────────────────────
+        override fun onCharacteristicRead(
+            g: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray,
+            status: Int
+        ) {
+            if (status == BluetoothGatt.GATT_SUCCESS &&
+                characteristic.uuid == BATTERY_LEVEL_UUID) {
+                val pct = value.firstOrNull()?.toInt()?.and(0xFF) ?: return
+                Log.d("BleService", "Battery read (API33): $pct%")
+                handler.post { onBatteryReceived(pct.coerceIn(0, 100)) }
+            }
+        }
+
+
     }
 
     // ─── Write to ESP32 ───────────────────────────────────────────────────────

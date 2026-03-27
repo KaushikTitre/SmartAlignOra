@@ -2,6 +2,7 @@ package com.example.smartalignoraapplication.ui.screens
 
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -42,10 +43,10 @@ private data class BottomTab(
 )
 
 private val tabs = listOf(
-    BottomTab("Home",     Icons.Default.Home,          Icons.Filled.Home),
-    BottomTab("Device",   Icons.Default.DevicesOther,  Icons.Filled.DevicesOther),
-    BottomTab("Posture",  Icons.Default.Person,         Icons.Filled.Person),
-    BottomTab("Analysis", Icons.Default.BarChart,       Icons.Filled.BarChart)
+    BottomTab("Home",     Icons.Default.Home,         Icons.Filled.Home),
+    BottomTab("Device",   Icons.Default.DevicesOther, Icons.Filled.DevicesOther),
+    BottomTab("Posture",  Icons.Default.Person,        Icons.Filled.Person),
+    BottomTab("Analysis", Icons.Default.BarChart,      Icons.Filled.BarChart)
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -65,6 +66,8 @@ fun MainShell(
     val showEmailDialog     by viewModel.showEmailInputDialog
     val continuousFallCount by viewModel.continuousFallCount
     val emailSentStatus     by viewModel.emailSentStatus
+    val battery             by viewModel.batteryLevel
+    val isConnected         by viewModel.isConnected
 
     Scaffold(
         containerColor = AppColors.SoftBg,
@@ -87,14 +90,14 @@ fun MainShell(
                     verticalAlignment     = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    // ── Left: connection dot + app name ───────────────────────
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        // Connection indicator dot
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    if (viewModel.isConnected.value) AppColors.TealAccent
+                                    if (isConnected) AppColors.TealAccent
                                     else Color(0xFFEF4444)
                                 )
                         )
@@ -106,19 +109,26 @@ fun MainShell(
                             fontWeight = FontWeight.Bold
                         )
                     }
-                    // Settings gear — always visible
-                    IconButton(
-                        onClick  = { showSettings = true },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .clip(CircleShape)
-                            .background(Color.White.copy(alpha = 0.15f))
-                    ) {
-                        Icon(
-                            Icons.Default.Settings, "Settings",
-                            tint     = Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
+
+                    // ── Right: battery chip + settings gear ───────────────────
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (isConnected) {
+                            BatteryChip(level = battery)
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        IconButton(
+                            onClick  = { showSettings = true },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.15f))
+                        ) {
+                            Icon(
+                                Icons.Default.Settings, "Settings",
+                                tint     = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -166,7 +176,6 @@ fun MainShell(
                     onEnableBluetooth     = onEnableBluetooth
                 )
                 2 -> PostureTab(viewModel = viewModel)
-                // ✅ AnalysisScreen ला sessions + counts pass करतो
                 3 -> AnalysisScreen(viewModel = viewModel)
             }
         }
@@ -196,7 +205,7 @@ fun MainShell(
         )
     }
 
-    // Popup — only after 10 consecutive falls AND fallAlertEnabled = true
+    // ── Fall alert popup ──────────────────────────────────────────────────────
     if (fallDetected && viewModel.settingsState.fallAlertEnabled) {
         FallAlertDialog(
             location         = viewModel.lastKnownLocation.value,
@@ -205,6 +214,155 @@ fun MainShell(
             emailSentStatus  = emailSentStatus,
             onDismiss        = { viewModel.dismissFallAlert() }
         )
+    }
+}
+
+// =============================================================================
+// BATTERY CHIP — compact pill shown in TopBar when device is connected
+// =============================================================================
+@Composable
+private fun BatteryChip(level: Int) {
+    val (icon, tint) = when {
+        level < 0   -> Icons.Default.BatteryUnknown to Color.White.copy(alpha = 0.5f)
+        level <= 10 -> Icons.Default.Battery0Bar    to Color(0xFFEF4444)
+        level <= 30 -> Icons.Default.Battery2Bar    to Color(0xFFF59E0B)
+        level <= 60 -> Icons.Default.Battery4Bar    to Color(0xFFE5E7EB)
+        level <= 85 -> Icons.Default.Battery5Bar    to Color(0xFF86EFAC)
+        else        -> Icons.Default.BatteryFull    to Color(0xFF4ADE80)
+    }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier          = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color.White.copy(alpha = 0.12f))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    ) {
+        Icon(
+            imageVector        = icon,
+            contentDescription = "Battery",
+            tint               = tint,
+            modifier           = Modifier.size(16.dp)
+        )
+        if (level >= 0) {
+            Spacer(Modifier.width(3.dp))
+            Text(
+                text       = "$level%",
+                color      = tint,
+                fontSize   = 11.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+// =============================================================================
+// BATTERY CARD — full card shown in DeviceTab when connected
+// =============================================================================
+@Composable
+private fun BatteryCard(level: Int) {
+    val barColor = when {
+        level < 0   -> AppColors.BorderColor
+        level <= 10 -> Color(0xFFEF4444)
+        level <= 30 -> Color(0xFFF59E0B)
+        else        -> AppColors.TealAccent
+    }
+    val statusLabel = when {
+        level < 0   -> "Not available"
+        level <= 10 -> "Critical — charge now"
+        level <= 30 -> "Low — charge soon"
+        level <= 60 -> "Moderate"
+        level <= 85 -> "Good"
+        else        -> "Full"
+    }
+    val battIcon = when {
+        level < 0   -> Icons.Default.BatteryUnknown
+        level <= 10 -> Icons.Default.Battery0Bar
+        level <= 30 -> Icons.Default.Battery2Bar
+        level <= 60 -> Icons.Default.Battery4Bar
+        level <= 85 -> Icons.Default.Battery5Bar
+        else        -> Icons.Default.BatteryFull
+    }
+
+    Card(
+        modifier  = Modifier.fillMaxWidth(),
+        shape     = RoundedCornerShape(AppDimens.radiusXl),
+        colors    = CardDefaults.cardColors(containerColor = AppColors.CardWhite),
+        elevation = CardDefaults.cardElevation(1.dp)
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+
+            // ── Header row ────────────────────────────────────────────────────
+            Row(
+                modifier          = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector        = battIcon,
+                    contentDescription = "Battery",
+                    tint               = barColor,
+                    modifier           = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Battery",
+                    fontSize   = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color      = AppColors.TextPrimary,
+                    modifier   = Modifier.weight(1f)
+                )
+                Text(
+                    if (level >= 0) "$level%" else "–",
+                    fontSize   = 24.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color      = barColor
+                )
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+            // ── Status subtitle ───────────────────────────────────────────────
+            Text(
+                statusLabel,
+                fontSize = 12.sp,
+                color    = AppColors.TextSecondary
+            )
+
+            // ── Animated fill bar (only when level is known) ──────────────────
+            if (level >= 0) {
+                Spacer(Modifier.height(14.dp))
+                val animW by animateFloatAsState(
+                    targetValue   = level / 100f,
+                    animationSpec = tween(700),
+                    label         = "battery_bar"
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(10.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(AppColors.BorderColor)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(animW)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(barColor)
+                    )
+                }
+                // ── Tick marks at 25 / 50 / 75 ───────────────────────────────
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    listOf("0%", "25%", "50%", "75%", "100%").forEach { tick ->
+                        Text(tick, fontSize = 9.sp, color = AppColors.TextTertiary)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -219,8 +377,8 @@ fun HomeTab(viewModel: BleViewModel) {
     val badCount      = viewModel.sessionBadCount.value
     val total         = goodCount + badCount
     val goodPct       = if (total > 0) goodCount * 100f / total else 0f
-    val fallLabel by viewModel.fallLabelForUI
-    val fallProb  by viewModel.fallProbForUI
+    val fallLabel    by viewModel.fallLabelForUI
+    val fallProb     by viewModel.fallProbForUI
 
     val postureColor = when {
         postureState.contains("GOOD") -> AppColors.GoodGreen
@@ -432,6 +590,7 @@ fun DeviceTab(
     val isConnected   by viewModel.isConnected
     val status        by viewModel.status
     val isCalibrating by viewModel.isCalibrating
+    val battery       by viewModel.batteryLevel
 
     Column(
         modifier            = Modifier
@@ -440,7 +599,7 @@ fun DeviceTab(
             .padding(AppDimens.paddingLg),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Connection card
+        // ── Connection card ───────────────────────────────────────────────────
         Card(
             modifier  = Modifier.fillMaxWidth(),
             shape     = RoundedCornerShape(AppDimens.radiusXl),
@@ -480,7 +639,7 @@ fun DeviceTab(
             }
         }
 
-        // BT button
+        // ── BT connect / disconnect button ────────────────────────────────────
         Button(
             onClick = {
                 if (isConnected) viewModel.disconnect() else onRequestBtPermission()
@@ -502,7 +661,10 @@ fun DeviceTab(
             )
         }
 
-        // Calibration card
+        // ── Battery card — always shown, updates when connected ───────────────
+        BatteryCard(level = battery)
+
+        // ── Calibration card ──────────────────────────────────────────────────
         Card(
             modifier  = Modifier.fillMaxWidth(),
             shape     = RoundedCornerShape(AppDimens.radiusXl),
@@ -552,7 +714,7 @@ fun DeviceTab(
             }
         }
 
-        // Session stats when connected
+        // ── Live session stats (connected only) ───────────────────────────────
         if (isConnected) {
             Card(
                 modifier  = Modifier.fillMaxWidth(),
@@ -619,15 +781,15 @@ private fun CalibrationAnimation() {
 }
 
 // =============================================================================
-// POSTURE TAB — Shows posture animation + fall prediction
+// POSTURE TAB
 // =============================================================================
 @Composable
 fun PostureTab(viewModel: BleViewModel) {
     val postureState by viewModel.postureState
     val alertState   by viewModel.alertState
     val currentPitch by viewModel.currentPitch
-    val fallLabel by viewModel.fallLabelForUI
-    val fallProb  by viewModel.fallProbForUI
+    val fallLabel    by viewModel.fallLabelForUI
+    val fallProb     by viewModel.fallProbForUI
 
     val statusColor = when {
         postureState.contains("GOOD") -> AppColors.GoodGreen
@@ -645,9 +807,7 @@ fun PostureTab(viewModel: BleViewModel) {
         else                          -> "WAITING"
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().background(AppColors.SoftBg)
-    ) {
+    Column(modifier = Modifier.fillMaxSize().background(AppColors.SoftBg)) {
         // Posture status banner
         Box(
             modifier = Modifier
@@ -676,7 +836,6 @@ fun PostureTab(viewModel: BleViewModel) {
             }
         }
 
-        // ✅ Posture animation — always passes fall label
         PostureAnimationScreen(
             currentPitch    = currentPitch,
             fallLabel       = fallLabel,
@@ -743,9 +902,6 @@ fun LocationPermissionDialog(onAllow: () -> Unit, onDeny: () -> Unit) {
 
 // =============================================================================
 // FALL ALERT DIALOG
-// ✅ Shows when fall detected
-// ✅ "Send Email" button if fall alert enabled
-// ✅ Auto-sends after 10 falls
 // =============================================================================
 @Composable
 fun FallAlertDialog(
@@ -765,7 +921,6 @@ fun FallAlertDialog(
         ), label = "pulse"
     )
 
-
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
@@ -784,17 +939,16 @@ fun FallAlertDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Detection count
                 Surface(shape = RoundedCornerShape(20.dp), color = AppColors.BadBg) {
                     Text(
                         "Detection #${maxOf(fallCount, 1)}",
                         modifier   = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                         fontSize   = 13.sp,
                         fontWeight = FontWeight.Bold,
-                        color      = AppColors.BadRed)
+                        color      = AppColors.BadRed
+                    )
                 }
 
-                // Message
                 Text(
                     "10 consecutive falls confirmed.\nAn emergency email with GPS location has been sent automatically.",
                     fontSize   = 14.sp,
@@ -803,7 +957,6 @@ fun FallAlertDialog(
                     textAlign  = TextAlign.Center
                 )
 
-                // GPS status
                 if (location != null) {
                     Row(
                         modifier = Modifier
@@ -840,7 +993,6 @@ fun FallAlertDialog(
                     }
                 }
 
-                // Email status
                 if (emailSentStatus.isNotEmpty()) {
                     val statusColor = when {
                         emailSentStatus.startsWith("✅") -> AppColors.GoodGreen
@@ -865,40 +1017,29 @@ fun FallAlertDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 modifier            = Modifier.fillMaxWidth()
             ) {
-                // Send Email button — only if fall alert enabled
                 if (fallAlertEnabled) {
-
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(AppDimens.radiusLg),
-                        color = AppColors.BadBg
+                        shape    = RoundedCornerShape(AppDimens.radiusLg),
+                        color    = AppColors.BadBg
                     ) {
                         Row(
-                            modifier = Modifier.padding(12.dp),
+                            modifier          = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                Icons.Default.Email,
-                                null,
-                                tint = AppColors.BadRed,
-                                modifier = Modifier.size(16.dp)
-                            )
-
+                            Icon(Icons.Default.Email, null,
+                                tint = AppColors.BadRed, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(8.dp))
-
-                            Text(
-                                "Emergency email will be sent automatically",
-                                fontSize = 12.sp,
-                                color = AppColors.BadRed
-                            )
+                            Text("Emergency email will be sent automatically",
+                                fontSize = 12.sp, color = AppColors.BadRed)
                         }
                     }
-
                 } else {
-                    // Hint to enable in settings
-                    Surface(modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(AppDimens.radiusLg),
-                        color = AppColors.PurpleSurface) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape    = RoundedCornerShape(AppDimens.radiusLg),
+                        color    = AppColors.PurpleSurface
+                    ) {
                         Row(modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Settings, null, tint = AppColors.PurplePrimary,
@@ -910,7 +1051,6 @@ fun FallAlertDialog(
                     }
                 }
 
-                // Dismiss — always visible
                 OutlinedButton(
                     onClick  = onDismiss,
                     modifier = Modifier.fillMaxWidth().height(44.dp),
