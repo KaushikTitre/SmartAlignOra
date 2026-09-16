@@ -129,6 +129,8 @@ Built using **Kotlin**, the application provides:
 ---
 
 ## 📁 Project Structure
+
+```text
 SmartAlignOra/
 │
 ├── hardware/
@@ -140,6 +142,7 @@ SmartAlignOra/
 │   └── frontend/
 │
 └── README.md
+```
 
 🌿 Branches
 - main → Main software project
