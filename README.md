@@ -122,7 +122,7 @@ Built using **Kotlin**, the application provides:
 
 ## 🏗️ System Architecture
 
-![SmartAlignOra System Architecture](docs/images/system-architecture.png)
+![SmartAlignOra System Architecture](Architecture.png)
 
 **Wearable Device → BLE → Android App → ML Inference → Alerts & Analytics**
 
